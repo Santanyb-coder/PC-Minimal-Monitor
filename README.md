@@ -1,5 +1,6 @@
 # 🖥️ PC Minimal Monitor v1.0
 **by SantaNyb**
+<img width="636" height="597" alt="image" src="https://github.com/user-attachments/assets/cc3cdbb8-73a4-4117-9e9f-87d96d6f5c3a" />
 
 Лёгкий и минималистичный системный монитор для Windows 10/11 (x64), написанный на C# (.NET 8) с использованием библиотеки `LibreHardwareMonitorLib`. Работает в одном автономном Portable-файле без установки.
 
