@@ -32,6 +32,7 @@ namespace PcMonitor
         public bool OvShowTime { get; set; } = false;
         public int ThemeIndex { get; set; } = 0;
         public bool OverheatAlert { get; set; } = true;
+        public float UiScale { get; set; } = 1.0f;
     }
 
     public partial class Form1 : Form
@@ -41,9 +42,10 @@ namespace PcMonitor
         [DllImport("kernel32.dll", CharSet = CharSet.Auto, SetLastError = true)] static extern bool GlobalMemoryStatusEx([In, Out] MEMORYSTATUSEX lpBuffer);
         [DllImport("user32.dll")] static extern bool RegisterHotKey(IntPtr hWnd, int id, uint fsModifiers, uint vk);
         [DllImport("user32.dll")] static extern bool UnregisterHotKey(IntPtr hWnd, int id);
+
         private AppSettings _cfg = new();
         private string _cfgPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "PcMinimalMonitor", "settings.json");
-        private Computer _comp;
+        private Computer _comp, _mbComp; private string _mbErr = "ОК";
         private System.Windows.Forms.Timer _timer;
         private List<float> _cpuHist = new(), _gpuHist = new();
         private const int MaxPts = 60, TopOff = 64;
@@ -58,27 +60,32 @@ namespace PcMonitor
         private Dictionary<int, TimeSpan> _prevProc = new();
         private int _tab = 0;
         private List<Button> _tabBtns = new();
+        private Panel _tabPanel;
         private NotifyIcon _tray;
         private ToolStripMenuItem _trayTgl, _autoTop, _autoTray, _ovTgl, _ovTrayTgl, _alertTgl, _ovVramTgl, _ovTimeTgl;
-        private List<ToolStripMenuItem> _spdItems = new(), _posItems = new(), _colItems = new(), _bgItems = new(), _fontItems = new(), _themeItems = new();
+        private List<ToolStripMenuItem> _spdItems = new(), _posItems = new(), _colItems = new(), _bgItems = new(), _fontItems = new(), _themeItems = new(), _scaleItems = new();
         private bool _forceClose = false;
         private OverlayForm _ov;
         private const string TaskName = "PcMinimalMonitorAutostart";
-
         public Form1()
         {
             LoadSettings();
-            Text = "PC Minimal Monitor  v1.0  •  by SantaNyb"; Size = new Size(650, 540 + TopOff);
+            Text = "PC Minimal Monitor  v1.1  •  by SantaNyb";
             BackColor = Color.FromArgb(20, 20, 24); DoubleBuffered = true;
             FormBorderStyle = FormBorderStyle.FixedSingle; MaximizeBox = false;
             Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath);
             InitTabs(); InitMenu(); InitTray();
+            ApplyUiScale(_cfg.UiScale, false);
 
             _comp = new Computer { IsCpuEnabled = true, IsGpuEnabled = true, IsMemoryEnabled = true };
             try { _comp.Open(); } catch { }
             try { _comp.IsStorageEnabled = true; } catch { }
+            
+            try { _comp.IsStorageEnabled = true; } catch { }
+            
             try { _comp.IsMotherboardEnabled = true; } catch { }
             try { _comp.IsControllerEnabled = true; } catch { }
+            try { _comp.IsMotherboardEnabled = true; } catch { }
 
             _ov = new OverlayForm(_cfg, () => SaveSettings());
             if (_cfg.OvEnabled) _ov.Show();
@@ -90,6 +97,28 @@ namespace PcMonitor
             UpdateSensors();
             if (Environment.GetCommandLineArgs().Contains("--minimized")) { WindowState = FormWindowState.Minimized; ShowInTaskbar = false; Hide(); }
         }
+
+        private void ApplyUiScale(float scale, bool save = true)
+        {
+            _cfg.UiScale = scale;
+            ClientSize = new Size((int)(634 * scale), (int)((500 + TopOff) * scale));
+            if (_tabPanel != null)
+            {
+                _tabPanel.Height = (int)(36 * scale);
+                int[] widths = { 120, 115, 170 };
+                int x = (int)(20 * scale);
+                for (int i = 0; i < _tabBtns.Count; i++)
+                {
+                    _tabBtns[i].Location = new Point(x, (int)(4 * scale));
+                    _tabBtns[i].Size = new Size((int)(widths[i] * scale), (int)(28 * scale));
+                    _tabBtns[i].Font = new Font("Segoe UI", 9.2f * scale, FontStyle.Bold);
+                    x += (int)((widths[i] + 6) * scale);
+                }
+            }
+            if (save) SaveSettings();
+            Invalidate();
+        }
+
         private void LoadSettings() { try { if (File.Exists(_cfgPath)) _cfg = JsonSerializer.Deserialize<AppSettings>(File.ReadAllText(_cfgPath)) ?? new AppSettings(); } catch { _cfg = new AppSettings(); } }
         private void SaveSettings() { try { Directory.CreateDirectory(Path.GetDirectoryName(_cfgPath)!); File.WriteAllText(_cfgPath, JsonSerializer.Serialize(_cfg)); } catch { } }
         private (Color Cpu, Color Gpu, Color Ram) GetTheme() => _cfg.ThemeIndex switch { 1 => (Color.FromArgb(220, 225, 235), Color.FromArgb(165, 175, 190), Color.FromArgb(190, 195, 205)), 2 => (Color.FromArgb(255, 65, 85), Color.FromArgb(255, 145, 45), Color.FromArgb(220, 50, 110)), _ => (Color.FromArgb(0, 185, 255), Color.FromArgb(50, 215, 110), Color.FromArgb(180, 110, 255)) };
@@ -97,18 +126,18 @@ namespace PcMonitor
 
         private void InitTabs()
         {
-            var pnl = new Panel { Dock = DockStyle.Top, Height = 36, BackColor = Color.FromArgb(24, 24, 30) };
-            string[] names = { "   Главное", "   Диски", "   Кулеры", "   Система и Сеть" }; int[] widths = { 115, 105, 110, 155 }; int x = 20;
-            for (int i = 0; i < 4; i++)
+            _tabPanel = new Panel { Dock = DockStyle.Top, Height = 36, BackColor = Color.FromArgb(24, 24, 30) };
+            string[] names = { "   Главное", "   Диски", "    Система и Сеть" }; int[] widths = { 120, 115, 170 }; int x = 20;
+            for (int i = 0; i < 3; i++)
             {
                 int idx = i;
                 var btn = new Button { Text = names[i], Location = new Point(x, 4), Size = new Size(widths[i], 28), FlatStyle = FlatStyle.Flat, Font = new Font("Segoe UI", 9.2f, FontStyle.Bold), Cursor = Cursors.Hand, TextAlign = ContentAlignment.MiddleCenter };
                 btn.FlatAppearance.BorderSize = 0;
-                btn.Paint += (s, e) => { e.Graphics.SmoothingMode = SmoothingMode.AntiAlias; DrawIcon(e.Graphics, idx, 10, 7, idx == _tab ? GetTheme().Cpu : Color.FromArgb(160, 160, 175)); };
+                btn.Paint += (s, e) => { e.Graphics.SmoothingMode = SmoothingMode.AntiAlias; DrawIcon(e.Graphics, idx == 2 ? 6 : idx, (int)(10 * _cfg.UiScale), (int)(7 * _cfg.UiScale), idx == _tab ? GetTheme().Cpu : Color.FromArgb(160, 160, 175)); };
                 btn.Click += (s, e) => { _tab = idx; RefreshTabs(); Invalidate(); };
-                _tabBtns.Add(btn); pnl.Controls.Add(btn); x += widths[i] + 6;
+                _tabBtns.Add(btn); _tabPanel.Controls.Add(btn); x += widths[i] + 6;
             }
-            Controls.Add(pnl); RefreshTabs();
+            Controls.Add(_tabPanel); RefreshTabs();
         }
 
         private void RefreshTabs()
@@ -117,12 +146,7 @@ namespace PcMonitor
             for (int k = 0; k < _tabBtns.Count; k++) { _tabBtns[k].BackColor = k == _tab ? Color.FromArgb(42, 44, 54) : Color.FromArgb(24, 24, 30); _tabBtns[k].ForeColor = k == _tab ? ac : Color.FromArgb(160, 160, 175); _tabBtns[k].Invalidate(); }
         }
 
-        private ToolStripMenuItem MkItem(string txt, bool chk, Action onClick)
-        {
-            var it = new ToolStripMenuItem(txt) { Checked = chk };
-            it.Click += (s, e) => onClick();
-            return it;
-        }
+        private ToolStripMenuItem MkItem(string txt, bool chk, Action onClick) { var it = new ToolStripMenuItem(txt) { Checked = chk }; it.Click += (s, e) => onClick(); return it; }
         private void InitMenu()
         {
             var ms = new MenuStrip { BackColor = Color.FromArgb(28, 28, 34), ForeColor = Color.White, Renderer = new DarkRenderer(), Dock = DockStyle.Top };
@@ -132,6 +156,13 @@ namespace PcMonitor
             {
                 ToolStripMenuItem it = null; it = MkItem(lbl, val == _cfg.IntervalMs, () => { _cfg.IntervalMs = val; _timer.Interval = val; _spdItems.ForEach(x => x.Checked = false); it.Checked = true; SaveSettings(); });
                 _spdItems.Add(it); spd.DropDownItems.Add(it);
+            }
+
+            var sclM = new ToolStripMenuItem("Масштаб окна");
+            foreach (var (sName, sVal) in new[] { ("100% (Стандарт)", 1.0f), ("125% (Для 2K / 4K экранов)", 1.25f) })
+            {
+                ToolStripMenuItem it = null; it = MkItem(sName, Math.Abs(_cfg.UiScale - sVal) < 0.01f, () => { ApplyUiScale(sVal); _scaleItems.ForEach(x => x.Checked = false); it.Checked = true; });
+                _scaleItems.Add(it); sclM.DropDownItems.Add(it);
             }
 
             var ovM = new ToolStripMenuItem("Игровой оверлей");
@@ -157,8 +188,9 @@ namespace PcMonitor
             rIt = MkItem("В одну строчку", !_cfg.OvVertical, () => { _cfg.OvVertical = false; rIt.Checked = true; cIt.Checked = false; UpdateOverlay(); SaveSettings(); });
             cIt = MkItem("Столбиком", _cfg.OvVertical, () => { _cfg.OvVertical = true; cIt.Checked = true; rIt.Checked = false; UpdateOverlay(); SaveSettings(); });
             styM.DropDownItems.AddRange(new ToolStripItem[] { rIt, cIt });
+
             var colM = new ToolStripMenuItem("Цвет шрифта");
-            foreach (var (cN, cV) in new[] { ("Мятно-зелёный", Color.FromArgb(0, 220, 140)), ("Неоново-голубой", Color.FromArgb(0, 195, 255)), ("Белый", Color.White), ("Ярко-жёлтый", Color.FromArgb(255, 215, 0)), ("Кораллово-красный", Color.FromArgb(255, 95, 95)), ("Сиреневый", Color.FromArgb(190, 130, 255)) })
+            foreach (var (cN, cV) in new[] { ("Мятно-зелёный", Color.FromArgb(0, 220, 140)), ("Неоново-голубой", Color.FromArgb(0, 195, 255)), ("Белый", Color.White), ("Ярко-жёлтый", Color.FromArgb(255, 215, 0)), ("Кораллово-красный", Color.FromArgb(255, 95, 95)), ("Сиреневый", Color.FromArgb(190, 130, 255)), ("Чёрный (с обводкой)", Color.FromArgb(15, 15, 18)) })
             {
                 ToolStripMenuItem it = null; it = MkItem(cN, cV.ToArgb() == _cfg.OvColorArgb, () => { _cfg.OvColorArgb = cV.ToArgb(); _ov.ApplyStyle(_cfg); _colItems.ForEach(x => x.Checked = false); it.Checked = true; SaveSettings(); });
                 _colItems.Add(it); colM.DropDownItems.Add(it);
@@ -188,16 +220,10 @@ namespace PcMonitor
             _autoTop = MkItem("Запускать вместе с Windows", IsAuto(), ToggleAuto);
             var rst = MkItem("Сбросить пики (Макс. °C)", false, () => { _cpuMaxT = _cpuT; _gpuMaxT = _gpuT; Invalidate(); });
             var cpy = MkItem("Скопировать отчёт в буфер", false, CopyReport);
-            var abt = MkItem("О программе", false, () => MessageBox.Show(
-                "PC Minimal Monitor — Версия 1.0 (Release)\n\n" +
-                "Лёгкий системный монитор температур, частот и нагрузки в реальном времени.\n\n" +
-                "Разработчик: SantaNyb\n" +
-                "Технологии: C# / .NET 8 / LibreHardwareMonitor\n" +
-                "Горячая клавиша оверлея: Alt + H",
-                "О программе", MessageBoxButtons.OK, MessageBoxIcon.Information));
+            var abt = MkItem("О программе", false, () => MessageBox.Show("PC Minimal Monitor — Версия 1.1 (Release)\n\nЛёгкий системный монитор температур, частот и нагрузки в реальном времени.\n\nРазработчик: SantaNyb\nТехнологии: C# / .NET 8 / LibreHardwareMonitor\nГорячая клавиша оверлея: Alt + H", "О программе", MessageBoxButtons.OK, MessageBoxIcon.Information));
             var ex = MkItem("Выход из программы", false, () => { _forceClose = true; Application.Exit(); });
 
-            set.DropDownItems.AddRange(new ToolStripItem[] { spd, ovM, thmM, new ToolStripSeparator(), _alertTgl, _trayTgl, _autoTop, new ToolStripSeparator(), rst, cpy, new ToolStripSeparator(), abt, ex });
+            set.DropDownItems.AddRange(new ToolStripItem[] { spd, sclM, ovM, thmM, new ToolStripSeparator(), _alertTgl, _trayTgl, _autoTop, new ToolStripSeparator(), rst, cpy, new ToolStripSeparator(), abt, ex });
             ms.Items.Add(set); MainMenuStrip = ms; Controls.Add(ms);
         }
         private void InitTray()
@@ -214,17 +240,42 @@ namespace PcMonitor
 
         private void ToggleOverlay() { _cfg.OvEnabled = !_cfg.OvEnabled; if (_ovTgl != null) _ovTgl.Checked = _cfg.OvEnabled; if (_ovTrayTgl != null) _ovTrayTgl.Checked = _cfg.OvEnabled; if (_cfg.OvEnabled) { UpdateOverlay(); _ov.Show(); } else _ov.Hide(); SaveSettings(); }
         protected override void WndProc(ref Message m) { if (m.Msg == 0x0312 && m.WParam.ToInt32() == 1) ToggleOverlay(); base.WndProc(ref m); }
-        protected override void OnFormClosing(FormClosingEventArgs e) { if (!_forceClose && _cfg.MinimizeToTray && e.CloseReason == CloseReason.UserClosing) { e.Cancel = true; Hide(); ShowInTaskbar = false; return; } _timer?.Stop(); try { UnregisterHotKey(this.Handle, 1); _ov?.Hide(); _tray.Visible = false; _tray.Dispose(); _comp?.Close(); } catch { } base.OnFormClosing(e); }
+        protected override void OnFormClosing(FormClosingEventArgs e) { if (!_forceClose && _cfg.MinimizeToTray && e.CloseReason == CloseReason.UserClosing) { e.Cancel = true; Hide(); ShowInTaskbar = false; return; } _timer?.Stop(); try { UnregisterHotKey(this.Handle, 1); _ov?.Hide(); _tray.Visible = false; _tray.Dispose(); _comp?.Close(); _mbComp?.Close(); _mbComp?.Close(); } catch { } base.OnFormClosing(e); }
 
         private bool IsAuto() { try { using var p = Process.Start(new ProcessStartInfo("schtasks", $"/Query /TN \"{TaskName}\"") { CreateNoWindow = true, UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true }); p.WaitForExit(); return p.ExitCode == 0; } catch { return false; } }
         private void ToggleAuto() { string exe = Environment.ProcessPath ?? Application.ExecutablePath; using var p = Process.Start(new ProcessStartInfo("schtasks", !IsAuto() ? $"/Create /TN \"{TaskName}\" /TR \"\\\"{exe}\\\" --minimized\" /SC ONLOGON /RL HIGHEST /F" : $"/Delete /TN \"{TaskName}\" /F") { CreateNoWindow = true, UseShellExecute = false }); p.WaitForExit(); bool st = IsAuto(); _autoTop.Checked = st; _autoTray.Checked = st; }
-        private void CopyReport() { try { Clipboard.SetText($"=== PC Minimal Monitor ===\nCPU: {_cpuName} — {_cpuT:F0}°C (Макс: {_cpuMaxT:F0}°C) | Нагрузка: {_cpuL:F0}% | {_cpuClock:F0} МГц | {_cpuPower:F0} Вт\nGPU: {_gpuName} — {_gpuT:F0}°C (Макс: {_gpuMaxT:F0}°C) | Нагрузка: {_gpuL:F0}% | VRAM: {_vramUsed:F1}/{_vramTotal:F1} ГБ\nRAM: {_ramU:F1} / {_ramTot:F1} ГБ ({_ramPct:F0}%)"); if (_tray.Visible) _tray.ShowBalloonTip(2000, "Отчёт скопирован", "Сводка скопирована в буфер обмена.", ToolTipIcon.Info); } catch { } }
+        private void CopyReport()
+        {
+            try
+            {
+                var sb = new System.Text.StringBuilder();
+                sb.AppendLine($"=== PC Minimal Monitor v1.1 (by SantaNyb) ===");
+                sb.AppendLine($"CPU: {_cpuName} — {_cpuT:F0}°C | GPU: {_gpuName} — {_gpuT:F0}°C | RAM: {_ramU:F1}/{_ramTot:F1} ГБ");
+                sb.AppendLine("\n--- ДИАГНОСТИКА ДАТЧИКОВ ПЛАТЫ (Статус: {_mbErr}) ---");
+                foreach (var hw in _comp.Hardware.Concat(_mbComp?.Hardware ?? Enumerable.Empty<IHardware>()))
+                {
+                    sb.AppendLine($"[{hw.HardwareType}] {hw.Name}");
+                    foreach (var s in hw.Sensors.Where(x => x.SensorType == SensorType.Fan || x.SensorType == SensorType.Control))
+                        sb.AppendLine($"  - {s.SensorType}: {s.Name} = {s.Value}");
+                    foreach (var sh in hw.SubHardware)
+                    {
+                        sb.AppendLine($"  Sub: {sh.Name}");
+                        foreach (var s in sh.Sensors.Where(x => x.SensorType == SensorType.Fan || x.SensorType == SensorType.Control))
+                            sb.AppendLine($"    * {s.SensorType}: {s.Name} = {s.Value}");
+                    }
+                }
+                Clipboard.SetText(sb.ToString());
+                if (_tray.Visible) _tray.ShowBalloonTip(2000, "Отчёт скопирован", "Сводка и диагностика датчиков скопированы.", ToolTipIcon.Info);
+            }
+            catch { }
+        }
+
         private void UpdateSensors()
         {
             try
             {
                 var drvs = new List<DriveItem>(); var fans = new List<FanItem>(); float? rTmp = null;
-                foreach (var hw in _comp.Hardware)
+                foreach (var hw in _comp.Hardware.Concat(_mbComp?.Hardware ?? Enumerable.Empty<IHardware>()))
                 {
                     hw.Update(); foreach (var sh in hw.SubHardware) sh.Update();
                     if (hw.HardwareType == HardwareType.Cpu)
@@ -240,7 +291,7 @@ namespace PcMonitor
                     }
                     else if (hw.HardwareType == HardwareType.GpuNvidia || hw.HardwareType == HardwareType.GpuAmd || hw.HardwareType == HardwareType.GpuIntel)
                     {
-                        if (!string.IsNullOrWhiteSpace(hw.Name)) _gpuName = hw.Name.Replace("NVIDIA ", "").Replace("AMD ", "").Replace("Intel(R) ", "").ToUpper();
+                        if (!string.IsNullOrWhiteSpace(hw.Name)) _gpuName = hw.Name.Replace("NVIDIA GeForce ", "").Replace("NVIDIA ", "").Replace("AMD ", "").Replace("Intel(R) ", "").ToUpper();
                         var ts = hw.Sensors.Where(s => s.SensorType == SensorType.Temperature && s.Value.HasValue).ToList();
                         _gpuT = (ts.FirstOrDefault(s => s.Name.Equals("GPU Core", StringComparison.OrdinalIgnoreCase)) ?? ts.FirstOrDefault(s => s.Name.Contains("Core") && !s.Name.Contains("Hot")) ?? ts.FirstOrDefault())?.Value ?? _gpuT;
                         if (_gpuT > _gpuMaxT) _gpuMaxT = _gpuT;
@@ -255,24 +306,33 @@ namespace PcMonitor
                     else if (hw.HardwareType == HardwareType.Memory) rTmp = hw.Sensors.FirstOrDefault(s => s.SensorType == SensorType.Temperature && s.Value > 0)?.Value;
                     else if (hw.HardwareType == HardwareType.Storage)
                     {
+                        string dName = string.IsNullOrWhiteSpace(hw.Name) || hw.Name.Trim() == "..." ? "Накопитель (заблокировано изоляцией ядра)" : hw.Name;
                         var act = hw.Sensors.FirstOrDefault(s => s.SensorType == SensorType.Load && s.Name.Contains("Activity") && s.Value.HasValue);
                         var used = hw.Sensors.FirstOrDefault(s => s.SensorType == SensorType.Load && s.Name.Contains("Used") && s.Value.HasValue);
-                        drvs.Add(new DriveItem { Name = hw.Name, Temp = hw.Sensors.FirstOrDefault(s => s.SensorType == SensorType.Temperature && s.Value.HasValue)?.Value, Load = act?.Value ?? (used != null ? -used.Value : null) });
+                        drvs.Add(new DriveItem { Name = dName, Temp = hw.Sensors.FirstOrDefault(s => s.SensorType == SensorType.Temperature && s.Value > 0)?.Value, Load = act?.Value ?? (used != null ? -used.Value : null) });
                     }
-                    var all = hw.Sensors.Concat(hw.SubHardware.SelectMany(s => s.Sensors)).ToList();
+                    var all = hw.Sensors.Concat(hw.SubHardware.SelectMany(s => s.Sensors)).Concat(hw.SubHardware.SelectMany(s => s.SubHardware).SelectMany(ss => ss.Sensors)).ToList();
                     var rpms = all.Where(s => s.SensorType == SensorType.Fan && s.Value.HasValue).ToList();
                     var ctrls = all.Where(s => s.SensorType == SensorType.Control && s.Value.HasValue).ToList();
                     for (int i = 0; i < rpms.Count; i++)
                     {
                         bool isGpu = hw.HardwareType == HardwareType.GpuNvidia || hw.HardwareType == HardwareType.GpuAmd;
-                        if (!isGpu && rpms[i].Value.Value <= 0) continue;
+                        if (!isGpu && rpms[i].Value.Value <= 0 && !rpms[i].Name.Contains("CPU") && !rpms[i].Name.Contains("Pump")) continue;
                         float? pct = ctrls.FirstOrDefault(c => c.Name == rpms[i].Name)?.Value ?? (i < ctrls.Count ? ctrls[i].Value : null);
                         fans.Add(new FanItem { Name = (isGpu ? "GPU: " : "") + rpms[i].Name, Rpm = rpms[i].Value.Value, Pct = pct });
                     }
                 }
-
                 var ms = new MEMORYSTATUSEX();
                 if (GlobalMemoryStatusEx(ms)) { _ramTot = ms.ullTotalPhys / 1073741824f; _ramU = (ms.ullTotalPhys - ms.ullAvailPhys) / 1073741824f; _ramPct = ms.dwMemoryLoad; }
+                if (drvs.Count == 0)
+                {
+                    foreach (var d in DriveInfo.GetDrives().Where(x => x.IsReady && x.DriveType == DriveType.Fixed))
+                    {
+                        float usedPct = (float)((d.TotalSize - d.TotalFreeSpace) * 100.0 / d.TotalSize);
+                        string lbl = string.IsNullOrWhiteSpace(d.VolumeLabel) ? $"Локальный диск ({d.Name.TrimEnd('\\')})" : $"{d.VolumeLabel} ({d.Name.TrimEnd('\\')})";
+                        drvs.Add(new DriveItem { Name = lbl, Temp = null, Load = -usedPct });
+                    }
+                }
                 _ramT = rTmp; _drives = drvs; _fans = fans;
 
                 long rx = 0, tx = 0;
@@ -300,9 +360,10 @@ namespace PcMonitor
             }
             catch { }
         }
+
         private void UpdateOverlay()
         {
-            var parts = new List<string> { $"CPU {_cpuT:F0}°C ({_cpuL:F0}%)", $"GPU {_gpuT:F0}°C ({_gpuL:F0}%)", $"RAM {_ramPct:F0}%" };
+            var parts = new List<string> { $"CPU {(_cpuT > 0 ? $"{_cpuT:F0}°C" : "Н/Д")} ({_cpuL:F0}%)", $"GPU {_gpuT:F0}°C ({_gpuL:F0}%)", $"RAM {_ramPct:F0}%" };
             if (_cfg.OvShowVram && _vramTotal > 0) parts.Add($"VRAM {_vramUsed:F1}ГБ");
             if (_cfg.OvShowTime) parts.Add(DateTime.Now.ToString("HH:mm"));
             _ov.UpdateContent(string.Join(_cfg.OvVertical ? "\n" : "  |  ", parts), _cfg);
@@ -319,30 +380,36 @@ namespace PcMonitor
             else if (type == 5) { g.DrawRectangle(p, x + 1, y + 3, 12, 7); g.FillRectangle(b, x + 3, y + 5, 2, 3); g.FillRectangle(b, x + 6, y + 5, 2, 3); g.FillRectangle(b, x + 9, y + 5, 2, 3); g.DrawLine(p, x + 3, y + 12, x + 5, y + 12); g.DrawLine(p, x + 8, y + 12, x + 11, y + 12); }
             else if (type == 6) { g.DrawEllipse(p, x + 1, y + 1, 12, 12); g.DrawLine(p, x + 7, y + 3, x + 7, y + 7); g.DrawLine(p, x + 7, y + 7, x + 10, y + 9); }
         }
-
         protected override void OnPaint(PaintEventArgs e)
         {
-            base.OnPaint(e); var g = e.Graphics; g.SmoothingMode = SmoothingMode.AntiAlias; var thm = GetTheme();
+            base.OnPaint(e); var g = e.Graphics; g.SmoothingMode = SmoothingMode.AntiAlias;
+            g.ScaleTransform(_cfg.UiScale, _cfg.UiScale);
+            var thm = GetTheme();
             if (_tab == 0)
             {
-                string cSub = $"{(_cpuClock > 0 ? $"{_cpuClock:F0} МГц  •  " : "")}{(_cpuPower > 0 ? $"{_cpuPower:F0} Вт" : "Активен")}";
+                string cSub = _cpuT <= 0 && _cpuClock <= 0 ? "Заблокировано изоляцией ядра Windows" : $"{(_cpuClock > 0 ? $"{_cpuClock:F0} МГц  •  " : "")}{(_cpuPower > 0 ? $"{_cpuPower:F0} Вт" : "Активен")}";
                 string gSub = $"{(_gpuClock > 0 ? $"{_gpuClock:F0} МГц  •  " : "")}{(_gpuPower > 0 ? $"{_gpuPower:F0} Вт  •  " : "")}{(_vramTotal > 0 ? $"VRAM: {_vramUsed:F1}/{_vramTotal:F0} ГБ" : "")}";
                 DrawMainBlock(g, 12 + TopOff, 3, _cpuName, cSub, _cpuT, _cpuMaxT, _cpuL, _cpuHist, GetTempCol(_cpuT, thm.Cpu), _topCpu);
                 DrawMainBlock(g, 208 + TopOff, 4, _gpuName, gSub, _gpuT, _gpuMaxT, _gpuL, _gpuHist, GetTempCol(_gpuT, thm.Gpu), null);
                 DrawRamBlock(g, 404 + TopOff, thm.Ram);
             }
-            else if (_tab == 1) DrawListTab(g, 1, "НАКОПИТЕЛИ (SSD / NVMe M.2)", _drives.Select(d => (d.Name, d.Temp.HasValue ? $"{d.Temp:F0}°C" : "—", d.Load.HasValue ? (d.Load >= 0 ? $"Нагрузка: {d.Load:F0}%" : $"Занято: {-d.Load:F0}%") : "Активен", thm.Cpu)).ToList(), "Накопители с датчиками не найдены");
-            else if (_tab == 2) DrawListTab(g, 2, "ВЕНТИЛЯТОРЫ И ОХЛАЖДЕНИЕ", _fans.Select(f => (f.Name, f.Rpm > 0 ? $"{f.Rpm:F0} RPM" : "0 RPM (Стоп)", f.Pct.HasValue ? $"{f.Pct:F0}%" : "Авто", thm.Gpu)).ToList(), "Датчики вентиляторов не обнаружены платой");
+            else if (_tab == 1) DrawListTab(g, 1, "НАКОПИТЕЛИ (SSD / NVMe M.2)", _drives.Select(d => (d.Name, d.Temp.HasValue ? $"{d.Temp:F0}°C" : "Н/Д", d.Load.HasValue ? (d.Load >= 0 ? $"Нагрузка: {d.Load:F0}%" : $"Занято: {-d.Load:F0}%") : "Активен", thm.Cpu)).ToList(), "Накопители с датчиками не найдены");
+            
             else DrawSystemTab(g, thm.Cpu);
         }
+
         private void DrawMainBlock(Graphics g, int y, int iconType, string title, string sub, float temp, float maxT, float load, List<float> hist, Color col, string topProc)
         {
             using var fT = new Font("Segoe UI", 10f, FontStyle.Bold); using var fSub = new Font("Segoe UI", 8f); using var fL = new Font("Segoe UI", 8.5f); using var fB = new Font("Segoe UI", 22, FontStyle.Bold);
             using var bG = new SolidBrush(Color.FromArgb(160, 160, 175)); using var bC = new SolidBrush(col); using var bg = new SolidBrush(Color.FromArgb(30, 30, 36)); using var pB = new Pen(Color.FromArgb(55, 55, 65), 1);
 
-            DrawIcon(g, iconType, 20, y + 2, col); g.DrawString(title.Length > 26 ? title.Substring(0, 26) + "..." : title, fT, Brushes.White, 40, y);
-            if (!string.IsNullOrEmpty(sub)) g.DrawString(sub, fSub, bG, 235, y + 2);
-            g.DrawString($"{temp:F0}°C", fT, bC, 455, y); g.DrawString($"Макс: {maxT:F0}°C", fSub, bG, 515, y + 2);
+            DrawIcon(g, iconType, 20, y + 2, col);
+            string shortTitle = title.Length > 24 ? title.Substring(0, 24) + "…" : title;
+            g.DrawString(shortTitle, fT, Brushes.White, 40, y);
+            float titleW = g.MeasureString(shortTitle, fT).Width;
+            if (!string.IsNullOrEmpty(sub)) g.DrawString(sub, fSub, bG, 46 + titleW, y + 2);
+            g.DrawString(temp > 0 ? $"{temp:F0}°C" : "Н/Д", fT, bC, 455, y);
+            if (maxT > 0) g.DrawString($"Макс: {maxT:F0}°C", fSub, bG, 515, y + 2);
 
             var gR = new Rectangle(20, y + 26, 420, 132); g.FillRectangle(bg, gR); g.DrawRectangle(pB, gR);
             using var gP = new Pen(Color.FromArgb(45, 45, 54), 1) { DashStyle = DashStyle.Dash }; int y50 = gR.Bottom - gR.Height / 2; g.DrawLine(gP, gR.Left, y50, gR.Right, y50); g.DrawString("50°", new Font("Segoe UI", 7), bG, gR.Left + 4, y50 - 13);
@@ -354,7 +421,6 @@ namespace PcMonitor
             var bar = new Rectangle(lR.Left + 14, lR.Bottom - 22, lR.Width - 28, 8); g.FillRectangle(new SolidBrush(Color.FromArgb(45, 45, 54)), bar);
             int w = (int)((Math.Clamp(load, 0, 100) / 100f) * bar.Width); if (w > 0) g.FillRectangle(bC, new Rectangle(bar.Left, bar.Top, w, bar.Height));
         }
-
         private void DrawRamBlock(Graphics g, int y, Color col)
         {
             using var fT = new Font("Segoe UI", 10f, FontStyle.Bold); using var fS = new Font("Segoe UI", 8.5f); using var bG = new SolidBrush(Color.FromArgb(160, 160, 175)); using var bP = new SolidBrush(col);
@@ -372,7 +438,7 @@ namespace PcMonitor
             using var fH = new Font("Segoe UI", 11f, FontStyle.Bold); using var fR = new Font("Segoe UI", 10f, FontStyle.Bold); using var fS = new Font("Segoe UI", 9.5f); using var bG = new SolidBrush(Color.FromArgb(160, 160, 175));
             int y = 18 + TopOff; DrawIcon(g, iconType, 20, y + 3, GetTheme().Cpu); g.DrawString(header, fH, Brushes.White, 40, y); y += 34;
             if (items.Count == 0) { g.DrawString(emptyMsg, fS, bG, 20, y); return; }
-            foreach (var it in items.Take(8)) { var r = new Rectangle(20, y, 590, 44); g.FillRectangle(new SolidBrush(Color.FromArgb(30, 30, 36)), r); g.DrawRectangle(new Pen(Color.FromArgb(55, 55, 65), 1), r); g.DrawString(it.Name.Length > 36 ? it.Name.Substring(0, 36) + "..." : it.Name, fR, Brushes.White, r.Left + 15, r.Top + 12); g.DrawString(it.Val1, fR, new SolidBrush(it.Col), r.Right - 220, r.Top + 12); g.DrawString(it.Val2, fS, bG, r.Right - 115, r.Top + 13); y += 52; }
+            foreach (var it in items.Take(8)) { var r = new Rectangle(20, y, 590, 44); g.FillRectangle(new SolidBrush(Color.FromArgb(30, 30, 36)), r); g.DrawRectangle(new Pen(Color.FromArgb(55, 55, 65), 1), r); g.DrawString(it.Name.Length > 36 ? it.Name.Substring(0, 36) + "..." : it.Name, fR, Brushes.White, r.Left + 15, r.Top + 12); g.DrawString(it.Val1, fR, new SolidBrush(it.Col), r.Right - 245, r.Top + 12); g.DrawString(it.Val2, fS, bG, r.Right - 95, r.Top + 13); y += 52; }
         }
 
         private void DrawSystemTab(Graphics g, Color col)
@@ -382,14 +448,106 @@ namespace PcMonitor
             DrawListTab(g, 6, "СИСТЕМА И СЕТЬ", new List<(string, string, string, Color)> { ("Скорость интернета (Скачивание)", $"↓ {_netDownMb:F2} МБ/с", $"{_netDownMb * 8:F1} Мбит/с", col), ("Скорость интернета (Отдача)", $"↑ {_netUpMb:F2} МБ/с", $"{_netUpMb * 8:F1} Мбит/с", GetTheme().Gpu), ("Время работы ПК без перезагрузки", $"{(int)up.TotalHours} ч {up.Minutes} мин", "Аптайм", Color.White), ("Питание и аккумулятор", bat, "Статус", Color.FromArgb(180, 180, 195)) }, "");
         }
     }
-
     public class OverlayForm : Form
     {
-        private Label _lbl; private AppSettings _cfg; private Action _onSave; private bool _drag; private Point _dragStart;
-        public OverlayForm(AppSettings cfg, Action onSave) { _cfg = cfg; _onSave = onSave; FormBorderStyle = FormBorderStyle.None; TopMost = true; ShowInTaskbar = false; AutoSize = true; AutoSizeMode = AutoSizeMode.GrowAndShrink; Padding = new Padding(10, 6, 10, 6); _lbl = new Label { AutoSize = true, Dock = DockStyle.Fill }; _lbl.MouseDown += (s, e) => { if (_cfg.OvCorner == 4 && e.Button == MouseButtons.Left) { _drag = true; _dragStart = e.Location; } }; _lbl.MouseMove += (s, e) => { if (_drag) Location = new Point(Left + e.X - _dragStart.X, Top + e.Y - _dragStart.Y); }; _lbl.MouseUp += (s, e) => { if (_drag) { _drag = false; _cfg.OvCustomX = Left; _cfg.OvCustomY = Top; _onSave(); } }; Controls.Add(_lbl); ApplyStyle(cfg); }
-        protected override CreateParams CreateParams { get { var cp = base.CreateParams; cp.ExStyle |= 0x80000; if (_cfg?.OvCorner != 4) cp.ExStyle |= 0x20; return cp; } }
-        public void ApplyStyle(AppSettings cfg) { _cfg = cfg; _lbl.ForeColor = Color.FromArgb(cfg.OvColorArgb); _lbl.Font = new Font("Consolas", cfg.OvFontSize, FontStyle.Bold); if (cfg.OvBgMode == 0) { TransparencyKey = Color.Empty; BackColor = Color.FromArgb(18, 18, 22); Opacity = 0.55; } else if (cfg.OvBgMode == 1) { TransparencyKey = Color.Empty; BackColor = Color.FromArgb(14, 14, 18); Opacity = 1.0; } else { BackColor = Color.FromArgb(1, 1, 1); TransparencyKey = Color.FromArgb(1, 1, 1); Opacity = 1.0; } UpdateStyles(); Refresh(); }
-        public void UpdateContent(string text, AppSettings cfg) { _lbl.Text = text; var s = Screen.PrimaryScreen.WorkingArea; Location = cfg.OvCorner switch { 1 => new Point(s.Right - Width - 16, s.Top + 16), 2 => new Point(s.Left + 16, s.Bottom - Height - 16), 3 => new Point(s.Right - Width - 16, s.Bottom - Height - 16), 4 => new Point(cfg.OvCustomX, cfg.OvCustomY), _ => new Point(s.Left + 16, s.Top + 16) }; }
+        private string _text = "";
+        private AppSettings _cfg;
+        private Action _onSave;
+        private bool _drag;
+        private Point _dragStart;
+
+        public OverlayForm(AppSettings cfg, Action onSave)
+        {
+            _cfg = cfg; _onSave = onSave;
+            FormBorderStyle = FormBorderStyle.None;
+            TopMost = true;
+            ShowInTaskbar = false;
+            DoubleBuffered = true;
+            BackColor = Color.FromArgb(1, 1, 1);
+            TransparencyKey = Color.FromArgb(1, 1, 1);
+            MouseDown += (s, e) => { if (_cfg.OvCorner == 4 && e.Button == MouseButtons.Left) { _drag = true; _dragStart = e.Location; } };
+            MouseMove += (s, e) => { if (_drag) Location = new Point(Left + e.X - _dragStart.X, Top + e.Y - _dragStart.Y); };
+            MouseUp += (s, e) => { if (_drag) { _drag = false; _cfg.OvCustomX = Left; _cfg.OvCustomY = Top; _onSave(); } };
+            ApplyStyle(cfg);
+        }
+
+        protected override CreateParams CreateParams
+        {
+            get { var cp = base.CreateParams; cp.ExStyle |= 0x80000; if (_cfg?.OvCorner != 4) cp.ExStyle |= 0x20; return cp; }
+        }
+
+        public void ApplyStyle(AppSettings cfg)
+        {
+            _cfg = cfg;
+            UpdateStyles();
+            ResizeToText();
+            Invalidate();
+        }
+
+        private void ResizeToText()
+        {
+            if (string.IsNullOrEmpty(_text)) return;
+            using var g = CreateGraphics();
+            using var f = new Font("Consolas", _cfg.OvFontSize, FontStyle.Bold);
+            var sz = g.MeasureString(_text, f);
+            Size = new Size((int)Math.Ceiling(sz.Width) + 22, (int)Math.Ceiling(sz.Height) + 14);
+        }
+
+        public void UpdateContent(string text, AppSettings cfg)
+        {
+            _cfg = cfg;
+            if (_text != text) { _text = text; ResizeToText(); }
+            var s = Screen.PrimaryScreen.WorkingArea;
+            Location = cfg.OvCorner switch
+            {
+                1 => new Point(s.Right - Width - 16, s.Top + 16),
+                2 => new Point(s.Left + 16, s.Bottom - Height - 16),
+                3 => new Point(s.Right - Width - 16, s.Bottom - Height - 16),
+                4 => new Point(cfg.OvCustomX, cfg.OvCustomY),
+                _ => new Point(s.Left + 16, s.Top + 16)
+            };
+            Invalidate();
+        }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            base.OnPaint(e);
+            if (string.IsNullOrEmpty(_text)) return;
+            var g = e.Graphics;
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+            g.PixelOffsetMode = PixelOffsetMode.HighQuality;
+
+            if (_cfg.OvBgMode == 0)
+            {
+                using var bg = new SolidBrush(Color.FromArgb(150, 18, 18, 24));
+                g.FillRectangle(bg, 0, 0, Width, Height);
+            }
+            else if (_cfg.OvBgMode == 1)
+            {
+                using var bg = new SolidBrush(Color.FromArgb(255, 14, 14, 18));
+                g.FillRectangle(bg, 0, 0, Width, Height);
+            }
+
+            var txtCol = Color.FromArgb(_cfg.OvColorArgb);
+            bool isDarkText = txtCol.R < 40 && txtCol.G < 40 && txtCol.B < 40;
+            var outlineCol = isDarkText ? Color.FromArgb(245, 245, 250) : Color.FromArgb(10, 10, 14);
+
+            using var path = new GraphicsPath();
+            using var ff = new FontFamily("Consolas");
+            float emSize = g.DpiY * _cfg.OvFontSize / 72f;
+            string[] lines = _text.Split('\n');
+            float y = 7f;
+            foreach (var line in lines)
+            {
+                path.AddString(line, ff, (int)FontStyle.Bold, emSize, new PointF(10f, y), StringFormat.GenericDefault);
+                y += emSize * 1.25f;
+            }
+
+            using var outlinePen = new Pen(outlineCol, 2.4f) { LineJoin = LineJoin.Round };
+            using var fillBrush = new SolidBrush(txtCol);
+            g.DrawPath(outlinePen, path);
+            g.FillPath(fillBrush, path);
+        }
     }
 
     public class DarkRenderer : ToolStripProfessionalRenderer { public DarkRenderer() : base(new DarkTable()) { } protected override void OnRenderItemText(ToolStripItemTextRenderEventArgs e) { e.TextColor = Color.FromArgb(235, 235, 245); base.OnRenderItemText(e); } }
@@ -402,6 +560,12 @@ namespace PcMonitor
         public override Color CheckBackground => Color.FromArgb(0, 140, 210); public override Color CheckSelectedBackground => Color.FromArgb(0, 160, 235);
     }
 }
+
+
+
+
+
+
 
 
 

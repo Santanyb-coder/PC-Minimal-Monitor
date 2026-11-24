@@ -1,16 +1,37 @@
-namespace PcMonitor;
+﻿using System;
+using System.Runtime.InteropServices;
+using System.Threading;
+using System.Windows.Forms;
 
-static class Program
+namespace PcMonitor
 {
-    /// <summary>
-    ///  The main entry point for the application.
-    /// </summary>
-    [STAThread]
-    static void Main()
+    internal static class Program
     {
-        // To customize application configuration such as set high DPI settings or default font,
-        // see https://aka.ms/applicationconfiguration.
-        ApplicationConfiguration.Initialize();
-        Application.Run(new Form1());
-    }    
+        [DllImport("user32.dll")] static extern IntPtr FindWindow(string lpClassName, string lpWindowName);
+        [DllImport("user32.dll")] static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+        [DllImport("user32.dll")] static extern bool SetForegroundWindow(IntPtr hWnd);
+
+        [STAThread]
+        static void Main()
+        {
+            using var mutex = new Mutex(true, "Global\\PcMinimalMonitor_SantaNyb_SingleInstance", out bool isNew);
+            if (!isNew)
+            {
+                // Если копия уже запущена — находим её окно по части заголовка и выводим на экран
+                foreach (var p in System.Diagnostics.Process.GetProcessesByName("PcMonitor"))
+                {
+                    if (p.MainWindowHandle != IntPtr.Zero)
+                    {
+                        ShowWindow(p.MainWindowHandle, 9); // SW_RESTORE
+                        SetForegroundWindow(p.MainWindowHandle);
+                        break;
+                    }
+                }
+                return;
+            }
+
+            ApplicationConfiguration.Initialize();
+            Application.Run(new Form1());
+        }
+    }
 }
